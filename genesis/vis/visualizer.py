@@ -1,6 +1,4 @@
 import pyglet
-import numpy as np
-import torch
 
 import genesis as gs
 from genesis.repr_base import RBC
@@ -51,11 +49,16 @@ class Visualizer(RBC):
             if pyglet.version < "2.0":
                 display = pyglet.canvas.Display()
                 screen = display.get_default_screen()
-                scale = 1.0
+                screen_scale = 1.0
             else:
                 display = pyglet.display.get_display()
                 screen = display.get_default_screen()
-                scale = screen.get_scale()
+                try:
+                    screen_scale = screen.get_scale()
+                except NotImplementedError:
+                    # Probably some headless screen
+                    screen_scale = 1.0
+            screen_height, screen_width = screen.height, screen.width
             self._has_display = True
         except Exception as e:
             if show_viewer:
@@ -66,11 +69,11 @@ class Visualizer(RBC):
             if gs.global_scene_list:
                 raise gs.raise_exception(
                     "Interactive viewer not supported when managing multiple scenes. Please set `show_viewer=False` "
-                    "or call `scene.destroy`."
+                    "or call `del scene`."
                 )
 
             if viewer_options.res is None:
-                viewer_height = (screen.height * scale) * VIEWER_DEFAULT_HEIGHT_RATIO
+                viewer_height = (screen_height * screen_scale) * VIEWER_DEFAULT_HEIGHT_RATIO
                 viewer_width = viewer_height / VIEWER_DEFAULT_ASPECT_RATIO
                 viewer_options.res = (int(viewer_width), int(viewer_height))
             if viewer_options.run_in_thread is None:
@@ -94,7 +97,7 @@ class Visualizer(RBC):
         if isinstance(renderer_options, gs.renderers.BatchRenderer):
             from .batch_renderer import BatchRenderer
 
-            self._renderer = self._batch_renderer = BatchRenderer(self, renderer_options)
+            self._renderer = self._batch_renderer = BatchRenderer(self, renderer_options, vis_options)
         elif isinstance(renderer_options, gs.renderers.RayTracer):
             from .raytracer import Raytracer
 
@@ -127,17 +130,43 @@ class Visualizer(RBC):
         self.viewer_lock = None
         self._renderer = None
 
-    def add_camera(self, res, pos, lookat, up, model, fov, aperture, focus_dist, GUI, spp, denoise, env_idx):
-        cam_idx = len(self._cameras)
+    def add_camera(
+        self, res, pos, lookat, up, model, fov, aperture, focus_dist, GUI, spp, denoise, near, far, env_idx, debug
+    ):
+        cam_idx = len([camera for camera in self._cameras if camera.debug == debug])
         camera = Camera(
-            self, cam_idx, model, res, pos, lookat, up, fov, aperture, focus_dist, GUI, spp, denoise, env_idx=env_idx
+            self,
+            cam_idx,
+            model,
+            res,
+            pos,
+            lookat,
+            up,
+            fov,
+            aperture,
+            focus_dist,
+            GUI,
+            spp,
+            denoise,
+            near,
+            far,
+            env_idx=env_idx,
+            debug=debug,
         )
         self._cameras.append(camera)
         return camera
 
-    def add_light(self, pos, dir, intensity, directional, castshadow, cutoff):
+    def add_mesh_light(self, mesh, color, intensity, pos, quat, revert_dir, double_sided, cutoff):
+        if self._raytracer is not None:
+            self._raytracer.add_mesh_light(mesh, color, intensity, pos, quat, revert_dir, double_sided, cutoff)
+        else:
+            gs.raise_exception("`add_mesh_light` is specific to raytracer renderer.")
+
+    def add_light(self, pos, dir, color, intensity, directional, castshadow, cutoff, attenuation):
         if self._batch_renderer is not None:
-            self._batch_renderer.add_light(pos, dir, intensity, directional, castshadow, cutoff)
+            self._batch_renderer.add_light(pos, dir, color, intensity, directional, castshadow, cutoff, attenuation)
+        else:
+            gs.raise_exception("`add_light` is specific to batch renderer.")
 
     def reset(self):
         self._t = -1
@@ -151,10 +180,6 @@ class Visualizer(RBC):
             self._batch_renderer.reset()
 
         if self.viewer_lock is not None:
-            if self._batch_renderer is None:
-                for camera in self._cameras:
-                    self._rasterizer.render_camera(camera)
-
             if self._viewer is not None:
                 self._viewer.update(auto_refresh=True)
 
@@ -199,10 +224,11 @@ class Visualizer(RBC):
             return
 
         for camera in self._cameras:
-            if camera._attached_link is not None:
-                camera.move_to_attach()
-            elif camera._followed_entity is not None:
-                camera.update_following()
+            if camera.is_built:
+                if camera._attached_link is not None:
+                    camera.move_to_attach()
+                elif camera._followed_entity is not None:
+                    camera.update_following()
 
         if self._scene.rigid_solver.is_active():
             self._scene.rigid_solver.update_geoms_render_T()
@@ -235,6 +261,12 @@ class Visualizer(RBC):
             self._scene.pbd_solver.update_render_fields()
 
         self._t = self._scene._t
+
+    def colorize_seg_idxc_arr(self, seg_idxc_arr):
+        if self._batch_renderer is not None:
+            return self._batch_renderer.colorize_seg_idxc_arr(seg_idxc_arr)
+        else:
+            return self._context.colorize_seg_idxc_arr(seg_idxc_arr)
 
     # ------------------------------------------------------------------------------------
     # ----------------------------------- properties -------------------------------------
@@ -275,3 +307,10 @@ class Visualizer(RBC):
     @property
     def cameras(self):
         return self._cameras
+
+    @property
+    def segmentation_idx_dict(self):
+        if self._batch_renderer is not None:
+            return self._batch_renderer.seg_idxc_map
+        else:
+            return self._context.seg_idxc_map

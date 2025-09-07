@@ -214,8 +214,10 @@ class Scene(object):
             for mesh_node in self.mesh_nodes:
                 mesh = mesh_node.mesh
                 if any(primitive.is_floor for primitive in mesh.primitives):
-                    continue
-                corners_local = trimesh.bounds.corners(mesh.bounds)
+                    # Only take into account the centroid for floor plane
+                    corners_local = mesh.centroid[np.newaxis]
+                else:
+                    corners_local = trimesh.bounds.corners(mesh.bounds)
                 pose = self.get_pose(mesh_node)
                 corners_world = corners_local @ pose[:3, :3].T + pose[:3, 3]
                 corners.append(corners_world)
@@ -277,12 +279,14 @@ class Scene(object):
             raise TypeError("Unrecognized object type")
 
         if parent_node is None and parent_name is not None:
-            parent_nodes = self.get_nodes(name=parent_name)
-            if len(parent_nodes) == 0:
-                raise ValueError("No parent node with name {} found".format(parent_name))
-            elif len(parent_nodes) > 1:
-                raise ValueError("More than one parent node with name {} found".format(parent_name))
-            parent_node = list(parent_nodes)[0]
+            try:
+                parent_node, = self.get_nodes(name=parent_name)
+            except ValueError:
+                if len(parent_nodes) == 0:
+                    raise ValueError(f"No parent node with name '{parent_name}' found")
+                elif len(parent_nodes) > 1:
+                    raise ValueError(f"More than one parent node with name '{parent_name}' found")
+                raise
 
         self.add_node(node, parent_node=parent_node)
 

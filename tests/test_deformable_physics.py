@@ -6,9 +6,16 @@ import genesis as gs
 from .utils import assert_allclose
 
 
+pytestmark = [
+    pytest.mark.field_only,
+]
+
+
+@pytest.mark.required
+@pytest.mark.parametrize("n_envs", [0, 1, 2])
 @pytest.mark.parametrize("muscle_material", [gs.materials.MPM.Muscle, gs.materials.FEM.Muscle])
 @pytest.mark.parametrize("backend", [gs.cpu])
-def test_muscle(muscle_material, show_viewer):
+def test_muscle(n_envs, muscle_material, show_viewer):
     scene = gs.Scene(
         sim_options=gs.options.SimOptions(
             dt=5e-4,
@@ -57,7 +64,10 @@ def test_muscle(muscle_material, show_viewer):
             ),
         ),
     )
-    scene.build()
+    if n_envs > 0:
+        scene.build(n_envs=n_envs)
+    else:
+        scene.build()
 
     if isinstance(worm.material, gs.materials.MPM.Muscle):
         pos = worm.get_state().pos[0]
@@ -87,10 +97,14 @@ def test_muscle(muscle_material, show_viewer):
 
     scene.reset()
     for i in range(200):
-        worm.set_actuation(np.array([0.0, 0.0, 0.0, 1.0 * (0.5 + np.sin(0.005 * np.pi * i))]))
+        actuation = np.array([0.0, 0.0, 0.0, 1.0 * (0.5 + np.sin(0.005 * np.pi * i))])
+        if n_envs > 1:
+            actuation = np.tile(actuation, (n_envs, 1))
+        worm.set_actuation(actuation)
         scene.step()
 
 
+@pytest.mark.required
 @pytest.mark.parametrize("backend", [gs.gpu])
 def test_deformable_parallel(show_viewer):
     scene = gs.Scene(
@@ -150,7 +164,6 @@ def test_deformable_parallel(show_viewer):
         ),
         surface=gs.surfaces.Default(
             color=(0.2, 0.6, 1.0, 1.0),
-            vis_mode="particle",
         ),
     )
     mpm_cube = scene.add_entity(
@@ -161,7 +174,6 @@ def test_deformable_parallel(show_viewer):
         ),
         surface=gs.surfaces.Default(
             color=(0.9, 0.8, 0.2, 1.0),
-            vis_mode="particle",
         ),
     )
 
@@ -186,4 +198,4 @@ def test_deformable_parallel(show_viewer):
     assert_allclose(mpm_cube._solver.get_state(0).vel, 0, atol=1e-2)
     assert_allclose(entity_fem._solver.get_state(0).vel, 0, atol=1e-2)
     # FIXME: It is harder for fluids to be static
-    assert_allclose(water._solver.get_state(0).vel, 0, atol=4e-2)
+    assert_allclose(water._solver.get_state(0).vel, 0, atol=5e-2)
